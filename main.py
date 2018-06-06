@@ -5,7 +5,7 @@ import multiprocessing
 from predictor import Predictor
 
 data_path = "./predictor/datas"  # The directory of the input data
-output_path = "./predictor/outputs_jieba"  # The directory of the output data
+output_path = "./predictor/outputs_BiLSTM"  # The directory of the output data
 
 
 def format_result(result):

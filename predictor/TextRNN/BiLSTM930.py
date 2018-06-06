@@ -5,7 +5,7 @@ from tensorflow.contrib import rnn
 import math
 from os.path import join
 
-SEQ_LEN = 1000
+SEQ_LEN = 600
 err = 100032
 
 def get_accu_dic(acc_path):
@@ -104,13 +104,13 @@ def id_and_pad(facts,labels,word2id,label_dic):
     labels_id = np.asarray(labels_id)
     return facts_id,labels_id,facts_len
 
-def weight(shape, stddev=0.1, mean=0):
-    initial = tf.truncated_normal(shape=shape, mean=mean, stddev=stddev)
-    return tf.Variable(initial)
-
-def bias(shape, value=0.1):
-    initial = tf.constant(value=value, shape=shape)
-    return tf.Variable(initial)
+# def weight(shape, stddev=0.1, mean=0):
+#     initial = tf.truncated_normal(shape=shape, mean=mean, stddev=stddev)
+#     return tf.Variable(initial)
+#
+# def bias(shape, value=0.1):
+#     initial = tf.constant(value=value, shape=shape)
+#     return tf.Variable(initial)
 
 def main():
     train_batch_size = 64
@@ -122,9 +122,9 @@ def main():
     learning_rate = 0.01
     decay_steps=1000
     decay_rate=0.9
-    global_step = tf.Variable(0, trainable=False, name="Global_Step")
+    global_step = tf.Variable(-1, trainable=False, name="Global_Step")
     summaries_dir = 'summaries/'
-    epoch_num = 2
+    epoch_num = 10
     steps_per_print = 100
     steps_per_summary = 2
     epochs_per_dev = 2
@@ -151,10 +151,10 @@ def main():
 
     # Train and dev dataset
     train_dataset = tf.contrib.data.Dataset.from_tensor_slices((train_fact_ids, train_label_ids))
-    train_dataset = train_dataset.batch(train_batch_size)
+    train_dataset = train_dataset.shuffle(10000).batch(train_batch_size)
 
     dev_dataset = tf.contrib.data.Dataset.from_tensor_slices((valid_fact_ids, valid_label_ids))
-    dev_dataset = dev_dataset.batch(dev_batch_size)
+    dev_dataset = dev_dataset.shuffle(10000).batch(dev_batch_size)
 
     test_dataset = tf.contrib.data.Dataset.from_tensor_slices((test_fact_ids, test_label_ids))
     test_dataset = test_dataset.batch(test_batch_size)
@@ -186,13 +186,20 @@ def main():
 
     #2. Bi-lstm layer
     # define lstm cess:get lstm cell output
-    lstm_fw_cell=rnn.BasicLSTMCell(hidden_size) #forward direction cell
-    lstm_bw_cell=rnn.BasicLSTMCell(hidden_size) #backward direction cell
+    # lstm_fw_cell=rnn.BasicLSTMCell(hidden_size) #forward direction cell
+    # lstm_bw_cell=rnn.BasicLSTMCell(hidden_size) #backward direction cell
+    gru_fw_cell = rnn.GRUCell(hidden_size)
+    gru_bw_cell = rnn.GRUCell(hidden_size)
+    # lstm_fw_cell = rnn.LSTMCell(hidden_size)
+    # lstm_bw_cell = rnn.LSTMCell(hidden_size)
     if dropout_keep_prob is not None:
-        lstm_fw_cell = rnn.DropoutWrapper(lstm_fw_cell, output_keep_prob=dropout_keep_prob)
-        lstm_bw_cell = rnn.DropoutWrapper(lstm_bw_cell, output_keep_prob=dropout_keep_prob)
+        # lstm_fw_cell = rnn.DropoutWrapper(lstm_fw_cell, output_keep_prob=dropout_keep_prob)
+        # lstm_bw_cell = rnn.DropoutWrapper(lstm_bw_cell, output_keep_prob=dropout_keep_prob)
+        gru_fw_cell = rnn.DropoutWrapper(gru_fw_cell, output_keep_prob=dropout_keep_prob)
+        gru_bw_cell = rnn.DropoutWrapper(gru_bw_cell, output_keep_prob=dropout_keep_prob)
     #???加入sequence_length节省计算资源
-    outputs,_=tf.nn.bidirectional_dynamic_rnn(lstm_fw_cell,lstm_bw_cell,embedded_words,dtype=tf.float32) #[batch_size,sequence_length,hidden_size]
+    # outputs,_=tf.nn.bidirectional_dynamic_rnn(lstm_fw_cell,lstm_bw_cell,inputs=embedded_words,dtype=tf.float32) #[batch_size,sequence_length,hidden_size]
+    outputs, _ = tf.nn.bidirectional_dynamic_rnn(gru_fw_cell, gru_bw_cell, inputs=embedded_words, dtype=tf.float32)
     print("outputs:===>",outputs)
     #3. concat output
     output_rnn=tf.concat(outputs,axis=2) #[batch_size,sequence_length,hidden_size*2]
@@ -200,8 +207,11 @@ def main():
     print("output_rnn_last:", output_rnn_last) # <tf.Tensor 'strided_slice:0' shape=(?, 200) dtype=float32>
     #4. logits(use linear layer)
     with tf.name_scope("output"): #inputs: A `Tensor` of shape `[batch_size, dim]`.  The forward activations of the input network.
-        w = weight([hidden_size * 2, num_classes])
-        b = bias([num_classes])
+        w = tf.get_variable("W_projection", shape=[hidden_size * 2, num_classes],
+                                            initializer=tf.random_normal_initializer(stddev=0.1))  # [embed_size,label_size]
+        b = tf.get_variable("b_projection", shape=[num_classes])
+        # w = weight([hidden_size * 2, num_classes])
+        # b = bias([num_classes])
         logits = tf.matmul(output_rnn_last, w) + b  # [batch_size,num_classes]
 
     with tf.name_scope("loss"):
@@ -210,15 +220,17 @@ def main():
         # input: `logits` and `labels` must have the same shape `[batch_size, num_classes]`
         # output: A 1-D `Tensor` of length `batch_size` of the same type as `logits` with the softmax cross entropy loss.
         losses = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=y_label_reshape,
-                                                                logits=tf.cast(logits, tf.float32));  # sigmoid_cross_entropy_with_logits.#losses=tf.nn.softmax_cross_entropy_with_logits(labels=self.input_y,logits=self.logits)
-        # print("1.sparse_softmax_cross_entropy_with_logits.losses:",losses) # shape=(?,)
+                                                                logits=logits)  # sigmoid_cross_entropy_with_logits.#losses=tf.nn.softmax_cross_entropy_with_logits(labels=self.input_y,logits=self.logits)
+        print("1.sparse_softmax_cross_entropy_with_logits.losses:",losses) # shape=(?,)
         loss = tf.reduce_mean(losses)  # print("2.loss.loss:", loss) #shape=()
-        # l2_losses = tf.add_n([tf.nn.l2_loss(v) for v in tf.trainable_variables() if 'bias' not in v.name]) * l2_lambda
-        # loss = loss + l2_losses
+        tv = tf.trainable_variables()
+        l2_losses = tf.add_n([tf.nn.l2_loss(v) for v in tv if 'bias' not in v.name]) * l2_lambda
+        loss = loss + l2_losses
 
     # """based on the loss, use SGD to update parameter"""
     learning_rate = tf.train.exponential_decay(learning_rate, global_step, decay_steps, decay_rate,
                                                staircase=True)
+
     train_op = tf.contrib.layers.optimize_loss(loss, global_step=global_step, learning_rate=learning_rate,
                                                optimizer="Adam")
 
@@ -234,24 +246,25 @@ def main():
     sess = tf.Session()
     sess.run(tf.global_variables_initializer())
 
-    # Summaries
-    if tf.gfile.Exists(summaries_dir):
-        tf.gfile.DeleteRecursively(summaries_dir)
+    gstep = 0
 
     summaries = tf.summary.merge_all()
     writer = tf.summary.FileWriter(join(summaries_dir, 'train'),
                                    sess.graph)
+
+    # if tf.gfile.Exists(summaries_dir):
+    #     tf.gfile.DeleteRecursively(summaries_dir)
 
     for epoch in range(epoch_num):
         tf.train.global_step(sess, global_step_tensor=global_step)
         # Train
         sess.run(train_initializer)
         for step in range(int(train_steps)):
-            smrs, loss_, acc, gstep, _ = sess.run([summaries, loss, accuracy, global_step, train_op],
+            smrs, loss_, acc_, gstep, _ = sess.run([summaries, loss, accuracy, global_step, train_op],
                                                      feed_dict={dropout_keep_prob:dropout_prob})
             # Print log
             if step % steps_per_print == 0:
-                print('Global Step', gstep, 'Step', step, 'Train Loss', loss_, 'Accuracy', acc)
+                print('Global Step', gstep, 'Step', step, 'Train Loss', loss_, 'Accuracy', acc_)
 
             # Summaries for tensorboard
             if gstep % steps_per_summary == 0:
@@ -269,6 +282,18 @@ def main():
         # Save model
         if epoch % epochs_per_save == 0:
             saver.save(sess, checkpoint_dir, global_step=gstep)
+
+
+    # ckpt = tf.train.get_checkpoint_state('../ckpt')
+    # saver.restore(sess, ckpt.model_checkpoint_path)
+    # print('Restore from', ckpt.model_checkpoint_path)
+    # sess.run(test_initializer)
+    # for step in range(int(test_steps)):
+    #     y = sess.run(predictions, feed_dict={dropout_keep_prob: 1})
+    #     # print(_)
+    #     # print("------------------")
+    #     print(y)
+
 
 if __name__ == '__main__':
     main()
