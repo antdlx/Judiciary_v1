@@ -1,11 +1,14 @@
 import json
 import tensorflow as tf
 import numpy as np
+import os
 from tensorflow.contrib import rnn
 import math
 from os.path import join
 
-SEQ_LEN = 600
+from mjudger import Judger
+
+SEQ_LEN = 200
 err = 100032
 
 def get_accu_dic(acc_path):
@@ -80,13 +83,15 @@ def id_and_pad(facts,labels,word2id,label_dic):
         for word in line:
             if word in word2id:
                 line_id.append(word2id[word])
+
             if len(line_id) == SEQ_LEN:
                 break
         facts_len.append(len(line_id))
         while len(line_id) < SEQ_LEN:
             line_id.append(0)
         facts_id.append(line_id)
-    for line in labels:
+    for line in range(len(labels)):
+        tmp = []
         # line_id = []
         #暂时只取第一个
         # for accusation in line:
@@ -94,15 +99,16 @@ def id_and_pad(facts,labels,word2id,label_dic):
         #         line_id.append(label_dic[accusation])
         #     else:
         #         line_id.append(0)
-        if line[0] in label_dic:
-            labels_id.append(label_dic[line[0]])
+        if labels[line][0] in label_dic:
+            tmp.append(label_dic[labels[line][0]])
         else:
-            labels_id.append(0)
-        # labels_id.append(line_id)
+            tmp.append(0)
+        tmp.append(facts_len[line])
+        labels_id.append(tmp)
 
     facts_id = np.asarray(facts_id)
     labels_id = np.asarray(labels_id)
-    return facts_id,labels_id,facts_len
+    return facts_id,labels_id
 
 # def weight(shape, stddev=0.1, mean=0):
 #     initial = tf.truncated_normal(shape=shape, mean=mean, stddev=stddev)
@@ -113,9 +119,9 @@ def id_and_pad(facts,labels,word2id,label_dic):
 #     return tf.Variable(initial)
 
 def main():
-    train_batch_size = 64
-    dev_batch_size = 64
-    test_batch_size = 1
+    train_batch_size = 128
+    dev_batch_size = 128
+    test_batch_size = 64
     embedding_size = 128
     hidden_size = 64
     dropout_prob = 0.5
@@ -124,11 +130,11 @@ def main():
     decay_rate=0.9
     global_step = tf.Variable(-1, trainable=False, name="Global_Step")
     summaries_dir = 'summaries/'
-    epoch_num = 10
+    epoch_num = 3
     steps_per_print = 100
     steps_per_summary = 2
-    epochs_per_dev = 2
-    epochs_per_save = 2
+    epochs_per_dev = 1
+    epochs_per_save = 1
     checkpoint_dir = "ckpt/model.ckpt"
 
     acc = get_accu_dic('../../datas/accu.txt')
@@ -137,12 +143,12 @@ def main():
     vocab_size = len(word2id) + 1
     num_classes = len(acc)
 
-    train_facts, train_labels = get_data('../../datas/cutted/data_test.txt', '../../datas/data_test.json')
+    train_facts, train_labels = get_data('../../datas/cutted/data_train.txt', '../../datas/data_train.json')
     valid_facts, valid_labels = get_data('../../datas/cutted/data_valid.txt', '../../datas/data_valid.json')
     test_facts, test_labels = get_data('../../datas/cutted/data_test.txt', '../../datas/data_test.json')
-    train_fact_ids, train_label_ids, train_fact_lens = id_and_pad(train_facts, train_labels, word2id, acc)
-    valid_fact_ids, valid_label_ids, valid_fact_lens = id_and_pad(valid_facts, valid_labels, word2id, acc)
-    test_fact_ids, test_label_ids, test_fact_lens = id_and_pad(test_facts, test_labels, word2id, acc)
+    train_fact_ids, train_label_ids = id_and_pad(train_facts, train_labels, word2id, acc)
+    valid_fact_ids, valid_label_ids = id_and_pad(valid_facts, valid_labels, word2id, acc)
+    test_fact_ids, test_label_ids = id_and_pad(test_facts, test_labels, word2id, acc)
 
     # Steps
     train_steps = math.ceil(len(train_fact_ids) / train_batch_size)
@@ -169,7 +175,9 @@ def main():
 
     # Input Layer
     with tf.variable_scope('inputs'):
-        x, y_label = iterator.get_next()
+        x, y_fix = iterator.get_next()
+        y_label = y_fix[:,0]
+        x_len = y_fix[:,1]
 
     with tf.name_scope("embedding"):
         embedding_table = np.loadtxt("../../datas/dic/embedding_table")
@@ -199,7 +207,8 @@ def main():
         gru_bw_cell = rnn.DropoutWrapper(gru_bw_cell, output_keep_prob=dropout_keep_prob)
     #???加入sequence_length节省计算资源
     # outputs,_=tf.nn.bidirectional_dynamic_rnn(lstm_fw_cell,lstm_bw_cell,inputs=embedded_words,dtype=tf.float32) #[batch_size,sequence_length,hidden_size]
-    outputs, _ = tf.nn.bidirectional_dynamic_rnn(gru_fw_cell, gru_bw_cell, inputs=embedded_words, dtype=tf.float32)
+
+    outputs, _ = tf.nn.bidirectional_dynamic_rnn(gru_fw_cell, gru_bw_cell, inputs=embedded_words, dtype=tf.float32,sequence_length=x_len)
     print("outputs:===>",outputs)
     #3. concat output
     output_rnn=tf.concat(outputs,axis=2) #[batch_size,sequence_length,hidden_size*2]
@@ -281,7 +290,40 @@ def main():
 
         # Save model
         if epoch % epochs_per_save == 0:
+            if os.path.exists('../outputs_BiLSTM/data_test.json'):
+                with open('../outputs_BiLSTM/data_test.json', "r+", encoding='utf8') as f:
+                    f.truncate()
+            sess.run(test_initializer)
+            for step in range(int(test_steps)):
+                if step % steps_per_print == 0:
+                    print("testing:{}".format(step))
+                predict_test = sess.run(predictions,feed_dict={dropout_keep_prob:1})
+                # print("PT:-------------------")
+                # print(predict_test.tolist())
+                # print(x_)
+                result = ''
+                for l in range(len(predict_test)):
+                    ans = {}
+                    # print(predict_test[l])
+                    tmp = predict_test.tolist()
+                    tmp2 = tmp[l]
+                    tmp3 = []
+                    tmp3.append(tmp2)
+                    ans['accusation'] = tmp3
+                    ans['articles'] = [0]
+                    ans['imprisonment'] = 0
+                    result += json.dumps(ans)+"\n"
+                with open('../outputs_BiLSTM/data_test.json',"a+",encoding='utf8') as f:
+                    f.write(result)
+
             saver.save(sess, checkpoint_dir, global_step=gstep)
+
+            judger = Judger("accu.txt", "law.txt")
+            res = judger.test("../datas", "../outputs_BiLSTM")
+            score = judger.get_score(res)
+            ouf = open(("predict_log"), "a+",encoding='utf8')
+            print(score,file=ouf)
+            ouf.close()
 
 
     # ckpt = tf.train.get_checkpoint_state('../ckpt')

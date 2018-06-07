@@ -5,6 +5,8 @@ from tensorflow.contrib import rnn
 import math
 from os.path import join
 
+from mjudger import Judger
+
 SEQ_LEN = 600
 err = 100032
 
@@ -279,7 +281,26 @@ def main():
 
         # Save model
         if epoch % epochs_per_save == 0:
+            with open('../outputs_BiLSTM/data_test.json', "r+", encoding='utf8') as f:
+                f.truncate()
+            sess.run(test_initializer)
+            for step in range(int(test_steps)):
+                predict_test = sess.run(predictions,feed_dict={dropout_keep_prob:1})
+                print("PT:-------------------")
+                print(predict_test)
+                ans = {}
+                ans['accusation'] = predict_test
+                ans['articles'] = [0]
+                ans['imprisonment'] = 0
+                with open('../outputs_BiLSTM/data_test.json',"a+",encoding='utf8') as f:
+                    f.write(ans)
+
             saver.save(sess, checkpoint_dir, global_step=gstep)
+
+            judger = Judger("../res/accu.txt", "../res/law.txt")
+            res = judger.test("../datas", "../outputs_BiLSTM")
+            score = judger.get_score(res)
+            print(score)
 
 
     # ckpt = tf.train.get_checkpoint_state('../ckpt')
