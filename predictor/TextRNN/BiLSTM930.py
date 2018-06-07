@@ -8,8 +8,10 @@ from os.path import join
 
 from mjudger import Judger
 
-SEQ_LEN = 200
+SEQ_LEN = 400
 err = 100032
+
+#这个类使用了Seq_len，但是seq太长会导致不能拟合
 
 def get_accu_dic(acc_path):
     '''
@@ -88,7 +90,7 @@ def id_and_pad(facts,labels,word2id,label_dic):
                 break
         facts_len.append(len(line_id))
         while len(line_id) < SEQ_LEN:
-            line_id.append(0)
+            line_id.append(18)
         facts_id.append(line_id)
     for line in range(len(labels)):
         tmp = []
@@ -119,9 +121,9 @@ def id_and_pad(facts,labels,word2id,label_dic):
 #     return tf.Variable(initial)
 
 def main():
-    train_batch_size = 128
-    dev_batch_size = 128
-    test_batch_size = 64
+    train_batch_size = 32
+    dev_batch_size = 32
+    test_batch_size = 32
     embedding_size = 128
     hidden_size = 64
     dropout_prob = 0.5
@@ -129,13 +131,13 @@ def main():
     decay_steps=1000
     decay_rate=0.9
     global_step = tf.Variable(-1, trainable=False, name="Global_Step")
-    summaries_dir = 'summaries/'
-    epoch_num = 3
+    summaries_dir = 'summaries2/'
+    epoch_num = 8
     steps_per_print = 100
     steps_per_summary = 2
     epochs_per_dev = 1
     epochs_per_save = 1
-    checkpoint_dir = "ckpt/model.ckpt"
+    checkpoint_dir = "ckpt/model2.ckpt"
 
     acc = get_accu_dic('../../datas/accu.txt')
     word2id = get_word2id('../../datas/dic/word2id.txt')
@@ -181,8 +183,12 @@ def main():
 
     with tf.name_scope("embedding"):
         embedding_table = np.loadtxt("../../datas/dic/embedding_table")
-        embedding = tf.get_variable('embedding',[vocab_size,embedding_size],initializer=tf.constant_initializer(embedding_table))
-
+        # embedding = tf.get_variable('embedding',[vocab_size,embedding_size],initializer=tf.constant_initializer(embedding_table),trainable=False)
+        embedding_ = tf.get_variable('embedding', [vocab_size, embedding_size],
+                                     initializer=tf.constant_initializer(embedding_table[1:]), trainable=False)
+        oov = tf.get_variable('oov', [1, embedding_size], initializer=tf.random_normal_initializer(stddev=0.1),
+                              trainable=True, dtype=tf.float32)
+        embedding = tf.concat([oov, embedding_], 0)
         # W_projection = tf.get_variable("W_projection", shape=[hidden_size * 2, num_classes],
         #                                initializer=tf.random_normal_initializer(stddev=0.1))  # [embed_size,label_size]
         # b_projection = tf.get_variable("b_projection", shape=[num_classes])  # [label_size]
@@ -252,7 +258,10 @@ def main():
     saver = tf.train.Saver()
 
     # Iterator
-    sess = tf.Session()
+    tf_config = tf.ConfigProto()
+    tf_config.gpu_options.per_process_gpu_memory_fraction = 0.35  # 分配35%
+    sess = tf.Session(config=tf_config)
+    # sess = tf.Session()
     sess.run(tf.global_variables_initializer())
 
     gstep = 0
@@ -290,8 +299,8 @@ def main():
 
         # Save model
         if epoch % epochs_per_save == 0:
-            if os.path.exists('../outputs_BiLSTM/data_test.json'):
-                with open('../outputs_BiLSTM/data_test.json', "r+", encoding='utf8') as f:
+            if os.path.exists('../outputs_BiLSTM2/data_test.json'):
+                with open('../outputs_BiLSTM2/data_test.json', "r+", encoding='utf8') as f:
                     f.truncate()
             sess.run(test_initializer)
             for step in range(int(test_steps)):
@@ -313,15 +322,15 @@ def main():
                     ans['articles'] = [0]
                     ans['imprisonment'] = 0
                     result += json.dumps(ans)+"\n"
-                with open('../outputs_BiLSTM/data_test.json',"a+",encoding='utf8') as f:
+                with open('../outputs_BiLSTM2/data_test.json',"a+",encoding='utf8') as f:
                     f.write(result)
 
             saver.save(sess, checkpoint_dir, global_step=gstep)
 
             judger = Judger("accu.txt", "law.txt")
-            res = judger.test("../datas", "../outputs_BiLSTM")
+            res = judger.test("../datas2", "../outputs_BiLSTM2")
             score = judger.get_score(res)
-            ouf = open(("predict_log"), "a+",encoding='utf8')
+            ouf = open(("predict_log2"), "a+",encoding='utf8')
             print(score,file=ouf)
             ouf.close()
 
